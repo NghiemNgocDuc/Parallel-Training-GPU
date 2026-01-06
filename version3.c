@@ -294,12 +294,23 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     clock_gettime(CLOCK_MONOTONIC, &end);
     stats->bwd_output_grad += get_time_diff(start, end);
 
-    // Gradients for weights2 and bias2
+    // Gradients for weights2 
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    matmul_at_b(hidden, grad_output, nn->grad_weights2, batch_size, HIDDEN_SIZE, OUTPUT_SIZE);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_matmul2 += get_time_diff(start, end);
+
+    // Update gradients for bias2
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    bias_backward(nn->grad_bias2, grad_output, batch_size, OUTPUT_SIZE);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_bias2 += get_time_diff(start, end);
+
+    // Computer dX2(input to hidden)
+    float *dx2 = malloc(batch_size * HIDDEN_SIZE * sizeof(float));
+
+    // grad_output
+    matmul_at_b(grad_output, nn->weights2, dx2, batch_size, OUTPUT_SIZE, HIDDEN_SIZE);
+
     
-
-
-
-
-
-
 
