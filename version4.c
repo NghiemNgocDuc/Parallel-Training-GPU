@@ -250,3 +250,81 @@ __global__ void weight_update_kernel(float *weights, float *grad_weights, int si
     }
 }
 
+// Cross entropy loss (CPU - same as v3.c)
+float cross_entropy_loss(float *output, int *labels, int batch_size) {
+    float total_loss = 0.0f;
+    for (int b = 0; b < batch_size; b++) {
+        total_loss -= logf(fmaxf(output[b * OUTPUT_SIZE + labels[b]], 1e-7f));
+    }
+    return total_loss / batch_size;
+}
+
+// Modified forward function with timing (GPU version of v3.c)
+void forward_timed(NeuralNetwork *nn, float *input, float *hidden, float *output, int batch_size, TimingStats *stats) {
+    struct timespec start, end;
+    dim3 block_size(32, 32);
+
+    // Input to Hidden Layer
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    dim3 grid_size1((HIDDEN_SIZE + block_size.x - 1) / block_size.x,
+                          (batch_size + block_size.y - 1) / block_size.y);
+    matmul_kernel<<<grid_size1, block_size>>>(input, nn->weights1, hidden, batch_size, HIDDEN_SIZE, INPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->fwd_matmul1 += get_time_diff(start, end);
+
+    // Add bias1
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    bias_forward_kernel<<<(batch_size * HIDDEN_SIZE + 255) / 256, 256>>>(hidden, nn->bias1, batch_size, HIDDEN_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->fwd_bias1 += get_time_diff(start, end);
+
+    // Apply ReLU
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    relu_forward_kernel<<<(batch_size * HIDDEN_SIZE + 255) / 256, 256>>>(hidden, batch_size * HIDDEN_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->fwd_relu += get_time_diff(start, end);
+
+    // Hidden to Output (Hidden @ W2)
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    dim3 grid_size2((OUTPUT_SIZE + block_size.x - 1) / block_size.x, (batch_size + block_size.y - 1) / block_size.y);
+    matmul_a_b_kernel<<<grid_size2, block_size>>>(hidden, nn->weights2, output, batch_size, HIDDEN_SIZE, OUTPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->fwd_matmul2 += get_time_diff(start, end);
+
+    // Add bias2
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    bias_forward_kernel<<<(batch_size * OUTPUT_SIZE + 255) / 256, 256>>>(output, nn->bias2, batch_size, OUTPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->fwd_bias2 += get_time_diff(start, end);
+
+    // Apply softmax
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    softmax_kernel<<<batch_size, 1>>>(output, batch_size, OUTPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->fwd_softmax += get_time_diff(start, end);
+}
+
+// Modified backward function with timing (GPU version of v3.c)
+void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *output, int *labels, int batch_size, TimingStats *stats) {
+    struct timespec start, end;
+    dim3 block_size(32, 32);
+
+    // Initialize gradients to zero
+    zero_grad_kernel<<<(HIDDEN_SIZE * INPUT_SIZE + 255) / 256, 256>>>(nn->grad_weights1, HIDDEN_SIZE * INPUT_SIZE);
+    zero_grad_kernel<<<(OUTPUT_SIZE * HIDDEN_SIZE + 255) / 256, 256>>>(nn->grad_weights2, OUTPUT_SIZE * HIDDEN_SIZE);
+    zero_grad_kernel<<<(HIDDEN_SIZE + 255) / 256, 256>>>(nn->grad_bias1, HIDDEN_SIZE);
+    zero_grad_kernel<<<(OUTPUT_SIZE + 255) / 256, 256>>>(nn->grad_bias2, OUTPUT_SIZE);
+
+    // Allocate temp gradients on GPU
+    float *grad_output, *dX2, *d_ReLU_out;
+    CUDA_CHECK(cudaMalloc(&grad_output, batch_size * OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&dX2, batch_size * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_ReLU_out, batch_size * HIDDEN_SIZE * sizeof(float)));
+
+    
