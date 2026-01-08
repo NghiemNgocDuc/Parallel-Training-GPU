@@ -334,7 +334,7 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     clock_gettime(CLOCK_MONOTONIC, &end);
     stats->bwd_output_grad += get_time_diff(start, end);
 
-    / Update gradients for weights2 (W2.grad = hidden.T @ grad_output)
+    // Update gradients for weights2 (W2.grad = hidden.T @ grad_output)
     clock_gettime(CLOCK_MONOTONIC, &start);
     dim3 grid_weights2((OUTPUT_SIZE + block_size.x - 1) / block_size.x, (HIDDEN_SIZE + block_size.y - 1) / block_size.y);
     matmul_at_b_kernel<<<grid_weights2, block_size>>>(hidden, grad_output, nn->grad_weights2, batch_size, HIDDEN_SIZE, OUTPUT_SIZE);
@@ -348,3 +348,5 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     CUDA_CHECK(cudaDeviceSynchronize());
     clock_gettime(CLOCK_MONOTONIC, &end);
     stats->bwd_bias2 += get_time_diff(start, end);
+    
+    
