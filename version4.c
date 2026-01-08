@@ -327,4 +327,24 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     CUDA_CHECK(cudaMalloc(&dX2, batch_size * HIDDEN_SIZE * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_ReLU_out, batch_size * HIDDEN_SIZE * sizeof(float)));
 
-    
+    // Compute gradients for output layer
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    compute_output_gradients_kernel<<<(batch_size + 255) / 256, 256>>>(grad_output, output, labels, batch_size);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_output_grad += get_time_diff(start, end);
+
+    / Update gradients for weights2 (W2.grad = hidden.T @ grad_output)
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    dim3 grid_weights2((OUTPUT_SIZE + block_size.x - 1) / block_size.x, (HIDDEN_SIZE + block_size.y - 1) / block_size.y);
+    matmul_at_b_kernel<<<grid_weights2, block_size>>>(hidden, grad_output, nn->grad_weights2, batch_size, HIDDEN_SIZE, OUTPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_matmul2 += get_time_diff(start, end);
+
+    // Update gradients for bias2
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    bias_backward_kernel<<<(OUTPUT_SIZE + 255) / 256, 256>>>(nn->grad_bias2, grad_output, batch_size, OUTPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_bias2 += get_time_diff(start, end);
