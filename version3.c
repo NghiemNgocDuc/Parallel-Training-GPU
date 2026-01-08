@@ -312,5 +312,163 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     // grad_output
     matmul_at_b(grad_output, nn->weights2, dx2, batch_size, OUTPUT_SIZE, HIDDEN_SIZE);
 
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    float *d_RELU_out = malloc(batch_size * HIDDEN_SIZE * sizeof(float));
+    for (int i = 0; i < batch_size * HIDDEN_SIZE; i++) {
+        d_RELU_out[i] = dx2[i] * (hidden[i] > 0);
+    }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_relu += get_time_diff(start, end);
     
+    // Gradients for weights1
+    clock_gettime(CLOCK_MONOTONIC, &start); 
+    matmul_at_b(input, d_RELU_out, nn->grad_weights1, batch_size, INPUT_SIZE, HIDDEN_SIZE);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_matmul1 += get_time_diff(start, end);
 
+    // Update gradients for bias1
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    bias_backward(nn->grad_bias1, d_RELU_out, batch_size, HIDDEN_SIZE);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->bwd_bias1 += get_time_diff(start, end);
+
+    free(grad_output);
+    free(dx2);
+    free(d_RELU_out);
+
+}
+
+// Update weights and biases
+void update_weights_timed(NeuralNetwork *nn, TimingStats *stats) {
+    struct timespec start, end;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (int i = 0; i < INPUT_SIZE * HIDDEN_SIZE; i++) {
+        nn->weights1[i] -= LEARNING_RATE * nn->grad_weights1[i];
+    }
+    for (int i = 0; i < HIDDEN_SIZE; i++) {
+        nn->bias1[i] -= LEARNING_RATE * nn->grad_bias1[i];
+    }
+    for (int i = 0; i < HIDDEN_SIZE * OUTPUT_SIZE; i++) {
+        nn->weights2[i] -= LEARNING_RATE * nn->grad_weights2[i];
+    }
+    for (int i = 0; i < OUTPUT_SIZE; i++) {
+        nn->bias2[i] -= LEARNING_RATE * nn->grad_bias2[i];
+    }
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->weight_updates += get_time_diff(start, end);
+}
+
+// Training function with detailed timing
+void train_timed(NeuralNetwork *nn, float *X_train, int *y_train) {
+    float *hidden = malloc(BATCH_SIZE * HIDDEN_SIZE * sizeof(float));
+    float *output = malloc(BATCH_SIZE * OUTPUT_SIZE * sizeof(float));
+
+    int num_batches = TRAIN_SIZE / BATCH_SIZE;
+
+    TimingStats stats = {0};
+
+    struct timespec total_start, total_end, step_start, step_end;
+    clock_gettime(CLOCK_MONOTONIC, &total_start);
+
+    for (int epoch = 0; epoch < EPOCHS; epoch++) {
+        float total_loss = 0.0f;
+        for (int batch = 0; batch < num_batches; batch++) {
+            int start_idx = batch * BATCH_SIZE;
+
+            // Data loading timing
+            clock_gettime(CLOCK_MONOTONIC, &step_start);
+            float *batch_input = &X_train[start_idx * INPUT_SIZE];
+            int *batch_labels = &y_train[start_idx];
+            clock_gettime(CLOCK_MONOTONIC, &step_end);
+            stats.data_loading += get_time_diff(step_start, step_end);
+
+            // Forward pass
+            foward_timed(nn, batch_input, output, BATCH_SIZE, &stats);
+
+            // Compute loss
+            clock_gettime(CLOCK_MONOTONIC, &step_start);
+            float batch_loss = cross_entropy_loss(output, batch_labels, BATCH_SIZE);
+            total_loss += batch_loss;
+            clock_gettime(CLOCK_MONOTONIC, &step_end);
+            stats.cross_entropy += get_time_diff(step_start, step_end);
+
+            // Backward pass
+            backward_timed(nn, batch_input, hidden, output, batch_labels, BATCH_SIZE, &stats);
+
+            // Update weights
+            update_weights_timed(nn, &stats);
+
+        }
+        printf("Epoch %d, Loss: %.4f\n", epoch + 1, total_loss / num_batches);
+    }
+    clock_gettime(CLOCK_MONOTONIC, &total_end);
+    stats.total_time = get_time_diff(total_start, total_end);
+
+    printf("\n=== C CPU IMPLEMENTATION TIMING BREAKDOWN ===\n");
+    printf("Total training time: %.1f seconds\n\n", stats.total_time);
+    
+    printf("Detailed Breakdown:\n");
+    printf("  Data loading:     %6.3fs (%5.1f%%)\n", stats.data_loading, 100.0 * stats.data_loading / stats.total_time);
+    double forward_pass = stats.fwd_matmul1 + stats.fwd_bias1 + stats.fwd_relu + stats.fwd_matmul2 + stats.fwd_bias2 + stats.fwd_softmax;
+    printf("  Forward pass:     %6.3fs (%5.1f%%)\n", forward_pass, 100.0 * forward_pass / stats.total_time);
+    printf("  Loss computation: %6.3fs (%5.1f%%)\n", stats.cross_entropy, 100.0 * stats.cross_entropy / stats.total_time);
+    double backward_pass = stats.bwd_output_grad + stats.bwd_matmul2 + stats.bwd_bias2 + stats.bwd_relu + stats.bwd_matmul1 + stats.bwd_bias1;
+    printf("  Backward pass:    %6.3fs (%5.1f%%)\n", backward_pass, 100.0 * backward_pass / stats.total_time);
+    printf("  Weight updates:   %6.3fs (%5.1f%%)\n", stats.weight_updates, 100.0 * stats.weight_updates / stats.total_time);
+    
+    free(hidden);
+    free(output);
+
+}
+
+// Initialize neural network with He initialization
+void initialize_network(NeuralNetwork *nn) {
+    nn->weights1 = (float *)malloc(INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
+    nn->bias1 = (float *)malloc(HIDDEN_SIZE * sizeof(float));
+    nn->weights2 = (float *)malloc(HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
+    nn->bias2 = (float *)malloc(OUTPUT_SIZE * sizeof(float));
+
+    nn->grad_weights1 = (float *)malloc(INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
+    nn->grad_bias1 = (float *)malloc(HIDDEN_SIZE * sizeof(float));
+    nn->grad_weights2 = (float *)malloc(HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
+    nn->grad_bias2 = (float *)malloc(OUTPUT_SIZE * sizeof(float));
+
+    initialize_random_weights(nn);
+
+}
+
+int main(){
+
+    srand(time(NULL));
+    NeuralNetwork nn;
+    initialize_network(&nn);
+
+    float *X_train = malloc(TRAIN_SIZE * INPUT_SIZE * sizeof(float));
+    int *y_train = malloc(TRAIN_SIZE * sizeof(int));
+    float *X_test = malloc(TEST_SIZE * INPUT_SIZE * sizeof(float));
+    int *y_test = malloc(TEST_SIZE * sizeof(int));
+
+    load_data("./data/X_train.bin", X_train, TRAIN_SIZE * INPUT_SIZE);
+    normalize_data(X_train, TRAIN_SIZE * INPUT_SIZE);
+    load_labels("./data/y_train.bin", y_train, TRAIN_SIZE);
+    load_data("./data/X_test.bin", X_test, TEST_SIZE * INPUT_SIZE);
+    normalize_data(X_test, TEST_SIZE * INPUT_SIZE);
+    load_labels("./data/y_test.bin", y_test, TEST_SIZE);
+
+    train_timed(&nn, X_train, y_train);
+
+    free(X_train);
+    free(y_train);
+    free(X_test);
+    free(y_test);
+    free(nn.weights1);
+    free(nn.bias1);
+    free(nn.weights2);
+    free(nn.bias2);
+    free(nn.grad_weights1);
+    free(nn.grad_bias1);
+    free(nn.grad_weights2);
+    free(nn.grad_bias2);
+    return 0;
+}
