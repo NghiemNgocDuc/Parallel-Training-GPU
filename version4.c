@@ -173,3 +173,80 @@ __global__ void bias_forward_kernel(float *x, float *bias, int batch_size, int s
     }
 }
 
+// Zero gradients kernel
+__global__ void zero_grad_kernel(float *grad, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        grad[idx] = 0.0f;
+    }
+}
+
+// Softmax kernel but runs on CPU for numerical stability
+__global__void softmax_kernel(float *x, int batch_size, int size) {
+    int idx = blockIdx.x;
+    if (idx < batch_size) {
+        float max_val = -INFINITY;
+        for (int i = 0; i < size; i++) {
+            if (x[idx * size + i] > max_val) {
+                max_val = x[idx * size + i];
+            }
+        }
+        float sum = 0.0f;
+        for (int i = 0; i < size; i++) {
+            x[idx * size + i] = expf(x[idx * size + i] - max_val);
+            sum += x[idx * size + i];
+        }
+        for (int i = 0; i < size; i++) {
+            x[idx * size + i] /= sum;
+        }
+    }
+}
+
+// Compute output gradient kernel
+__global__ void compute_output_gradient_kernel(float *predictions, int *labels, float *output_grad, int batch_size, int output_size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < batch_size){
+        for (int i = 0; i < output_size; i++) {
+            output_grad[idx * output_size + i] = predictions[idx * output_size + i];
+        }
+        int label = labels[idx];
+        output_grad[idx * output_size + label] -= 1.0f;
+
+        // Divide by batch size
+        for (int i = 0; i < output_size; i++) {
+            output_grad[idx * output_size + i] /= batch_size;
+        }
+
+    }
+}
+
+// Relu backward kernel
+__global__ void relu_backward_kernel(float *grad, float *activations, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        if (activations[idx] <= 0.0f) {
+            grad[idx] = 0.0f;
+        }
+    }
+}
+
+// Bias backward kernel
+__global__ void bias_backward_kernel(float *grad_bias, float *grad, int batch_size, int size) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < size) {
+        float sum = 0.0f;
+        for (int b = 0; b < batch_size; b++) {
+            sum += grad[b * size + i];
+        }
+        grad_bias[i] = sum;
+    }
+}
+
+// Weight update kernel
+__global__ void weight_update_kernel(float *weights, float *grad_weights, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        weights[idx] -= LEARNING_RATE * grad_weights[idx];
+    }
+}
+
