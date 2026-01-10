@@ -348,6 +348,7 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     CUDA_CHECK(cudaDeviceSynchronize());
     clock_gettime(CLOCK_MONOTONIC, &end);
     stats->bwd_bias2 += get_time_diff(start, end);
+    
     // Free temp grad_output
     CUDA_CHECK(cudaFree(grad_output));
     CUDA_CHECK(cudaFree(d_ReLU_out));
@@ -373,3 +374,25 @@ void update_weights_timed(NeuralNetwork *nn, TimingStats *stats) {
 
 // Train function with timing (GPU version of v3.c)
 
+void train_timed(NeuralNetwork *nn, float *X_train, int *y_train) {
+    float *d_hidden, *d_output, *d_input_batch;
+    int *d_labels_batch;
+
+    // Allocate GPU memory for batch processing
+    CUDA_CHECK(cudaMalloc(&d_hidden, BATCH_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_output, BATCH_SIZE * OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_input_batch, BATCH_SIZE * INPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_labels_batch, BATCH_SIZE * sizeof(int)));
+
+    // Lost is computed on CPU for numerical stability so need some host buffers for loss calculation
+    float *h_output = (float *)malloc(BATCH_SIZE * OUTPUT_SIZE * sizeof(float));
+
+    TimingStats stats = {0};
+
+    strut timespec total_start, total_end, step_start, step_end;
+    clock_gettime(CLOCK_MONOTONIC, &total_start);
+
+    for (int epoch = 0; epoch < EPOCHS; epoch++) {
+        float total_loss = 0.0f;
+
+        
