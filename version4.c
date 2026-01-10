@@ -348,5 +348,28 @@ void backward_timed(NeuralNetwork *nn, float *input, float *hidden, float *outpu
     CUDA_CHECK(cudaDeviceSynchronize());
     clock_gettime(CLOCK_MONOTONIC, &end);
     stats->bwd_bias2 += get_time_diff(start, end);
-    
-    
+    // Free temp grad_output
+    CUDA_CHECK(cudaFree(grad_output));
+    CUDA_CHECK(cudaFree(d_ReLU_out));
+    CUDA_CHECK(cudaFree(dX2));
+
+// Gradient descent step with timing for GPU
+void update_weights_timed(NeuralNetwork *nn, TimingStats *stats) {
+    struct timespec start, end;
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    // Update weights1
+    weight_update_kernel<<<(HIDDEN_SIZE * INPUT_SIZE + 255) / 256, 256>>>(nn->weights1, nn->grad_weights1, HIDDEN_SIZE * INPUT_SIZE);
+    // Update weights2
+    weight_update_kernel<<<(OUTPUT_SIZE * HIDDEN_SIZE + 255) / 256, 256>>>(nn->weights2, nn->grad_weights2, OUTPUT_SIZE * HIDDEN_SIZE);
+    // Update bias1
+    weight_update_kernel<<<(HIDDEN_SIZE + 255) / 256, 256>>>(nn->bias1, nn->grad_bias1, HIDDEN_SIZE);
+    // Update bias2
+    weight_update_kernel<<<(OUTPUT_SIZE + 255) / 256, 256>>>(nn->bias2, nn->grad_bias2, OUTPUT_SIZE);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats->weight_updates += get_time_diff(start, end);
+}
+
+// Train function with timing (GPU version of v3.c)
+
