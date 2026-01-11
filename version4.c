@@ -394,5 +394,148 @@ void train_timed(NeuralNetwork *nn, float *X_train, int *y_train) {
 
     for (int epoch = 0; epoch < EPOCHS; epoch++) {
         float total_loss = 0.0f;
-
         
+        for (int batch = 0; batch < TRAIN_SIZE / BATCH_SIZE; batch++) {
+            int start_idx = batch * BATCH_SIZE;
+            clock_gettime(CLOCK_MONOTONIC, &step_start);
+            float *batch_input = &X_train[start_idx * INPUT_SIZE];
+            int *batch_labels = &y_train[start_idx];
+
+        // Copy batch data to GPU
+        CUDA_CHECK(cudaMemcpy(d_input_batch, batch_input, BATCH_SIZE * INPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_labels_batch, batch_labels, BATCH_SIZE * sizeof(int), cudaMemcpyHostToDevice));
+        clock_gettime(CLOCK_MONOTONIC, &step_end);
+        stats.data_loading += get_time_diff(step_start, step_end);
+        
+        // Forward pass
+        forward_timed(nn, d_input_batch, d_hidden, d_output, BATCH_SIZE, &stats);
+        // Copy output back to host for loss calculation
+        CUDA_CHECK(cudaMemcpy(h_output, d_output, BATCH_SIZE * OUTPUT_SIZE * sizeof(float), cudaMemcpyDeviceToHost));
+        // Compute loss on CPU
+        CUDA_CHECK(cudaMemcpy(h_output, d_output, BATCH_SIZE * OUTPUT_SIZE * sizeof(float), cudaMemcpyDeviceToHost));
+
+        // Cross entropy loss timing
+        clock_gettime(CLOCK_MONOTONIC, &step_start);
+        float loss = cross_entropy_loss(h_output, batch_labels, BATCH_SIZE);
+        total_loss += loss;
+        clock_gettime(CLOCK_MONOTONIC, &step_end);
+        stats.cross_entropy += get_time_diff(step_start, step_end);
+
+        // Backward pass
+        backward_timed(nn, d_input_batch, d_hidden, d_output, d_labels_batch, BATCH_SIZE, &stats);
+
+        // Weight update
+        update_weights_timed(nn, &stats);
+
+        }
+
+        printf("Epoch %d, Loss: %.4f\n", epoch + 1, total_loss / (TRAIN_SIZE / BATCH_SIZE));
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &total_end);
+    stats.total_time = get_time_diff(total_start, total_end);
+
+     // End total timing
+    clock_gettime(CLOCK_MONOTONIC, &total_end);
+    stats.total_time = get_time_diff(total_start, total_end);
+    
+    // Print detailed timing breakdown
+    printf("\n=== CUDA GPU IMPLEMENTATION TIMING BREAKDOWN ===\n");
+    printf("Total training time: %.1f seconds\n\n", stats.total_time);
+    
+    printf("Detailed Breakdown:\n");
+    printf("  Data loading:     %6.3fs (%5.1f%%)\n", stats.data_loading, 100.0 * stats.data_loading / stats.total_time);
+    double forward_pass = stats.fwd_matmul1 + stats.fwd_bias1 + stats.fwd_relu + stats.fwd_matmul2 + stats.fwd_bias2 + stats.fwd_softmax;
+    printf("  Forward pass:     %6.3fs (%5.1f%%)\n", forward_pass, 100.0 * forward_pass / stats.total_time);
+    printf("  Loss computation: %6.3fs (%5.1f%%)\n", stats.cross_entropy, 100.0 * stats.cross_entropy / stats.total_time);
+    double backward_pass = stats.bwd_output_grad + stats.bwd_matmul2 + stats.bwd_bias2 + stats.bwd_relu + stats.bwd_matmul1 + stats.bwd_bias1;
+    printf("  Backward pass:    %6.3fs (%5.1f%%)\n", backward_pass, 100.0 * backward_pass / stats.total_time);
+    printf("  Weight updates:   %6.3fs (%5.1f%%)\n", stats.weight_updates, 100.0 * stats.weight_updates / stats.total_time);
+    
+    // Cleanup
+    CUDA_CHECK(cudaFree(d_hidden));
+    CUDA_CHECK(cudaFree(d_output));
+    CUDA_CHECK(cudaFree(d_input_batch));
+    CUDA_CHECK(cudaFree(d_labels_batch));
+    free(h_output);
+
+
+// Initialize weights using He initialization (same as v3.c)
+void initialize_random_weights(NeuralNetwork *nn) {
+    // Create host buffers
+    float *h_weights1 = (float *)malloc(INPUT_SIZE * HIDDEN_SIZE * sizeof(float));
+    float *h_weights2 = (float *)malloc(HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float));
+    float *h_bias1 = (float *)malloc(HIDDEN_SIZE * sizeof(float));
+    float *h_bias2 = (float *)malloc(OUTPUT_SIZE * sizeof(float));
+    
+    // Initialize on host
+    initialize_weights(h_weights1, INPUT_SIZE, HIDDEN_SIZE);
+    initialize_weights(h_weights2, HIDDEN_SIZE, OUTPUT_SIZE);
+    initialize_bias(h_bias1, HIDDEN_SIZE);
+    initialize_bias(h_bias2, OUTPUT_SIZE);
+    
+    // Copy to GPU
+    CUDA_CHECK(cudaMemcpy(nn->weights1, h_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(nn->weights2, h_weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(nn->bias1, h_bias1, HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(nn->bias2, h_bias2, OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    
+    // Free host buffers
+    free(h_weights1);
+    free(h_weights2);
+    free(h_bias1);
+    free(h_bias2);
+}
+
+
+// Initialize neural network with GPU memory
+void initialize_neural_network(NeuralNetwork *nn) {
+    CUDA_CHECK(cudaMalloc(&nn->weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->bias1, HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->bias2, OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->grad_weights1, INPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->grad_weights2, HIDDEN_SIZE * OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->grad_bias1, HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->grad_bias2, OUTPUT_SIZE * sizeof(float)));
+
+    initialize_random_weights(nn);
+
+
+}
+
+int main() {
+    srand(time(NULL));  // Random seed for natural variance
+
+    NeuralNetwork nn;
+    initialize_neural_network(&nn);
+
+    float *X_train = (float *)malloc(TRAIN_SIZE * INPUT_SIZE * sizeof(float));
+    int *y_train = (int *)malloc(TRAIN_SIZE * sizeof(int));
+    float *X_test = (float *)malloc(TEST_SIZE * INPUT_SIZE * sizeof(float));
+    int *y_test = (int *)malloc(TEST_SIZE * sizeof(int));
+
+    load_data("./data/X_train.bin", X_train, TRAIN_SIZE * INPUT_SIZE);
+    normalize_data(X_train, TRAIN_SIZE * INPUT_SIZE);
+    load_labels("./data/y_train.bin", y_train, TRAIN_SIZE);
+    load_data("./data/X_test.bin", X_test, TEST_SIZE * INPUT_SIZE);
+    normalize_data(X_test, TEST_SIZE * INPUT_SIZE);
+    load_labels("./data/y_test.bin", y_test, TEST_SIZE);
+
+    train_timed(&nn, X_train, y_train);
+
+    CUDA_CHECK(cudaFree(nn.weights1));
+    CUDA_CHECK(cudaFree(nn.weights2));
+    CUDA_CHECK(cudaFree(nn.bias1));
+    CUDA_CHECK(cudaFree(nn.bias2));
+    CUDA_CHECK(cudaFree(nn.grad_weights1));
+    CUDA_CHECK(cudaFree(nn.grad_weights2));
+    CUDA_CHECK(cudaFree(nn.grad_bias1));
+    CUDA_CHECK(cudaFree(nn.grad_bias2));
+    free(X_train);
+    free(y_train);
+    free(X_test);
+    free(y_test);
+
+    return 0;
+}
