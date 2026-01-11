@@ -38,3 +38,10 @@
 double get_time_diff(struct timespec start, struct timespec end) {
     return (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 }
+
+// Timing structure
+typedef struct {
+    double memory_transfers;  // H2D only (data at start of batch)
+    double gpu_compute;       // Forward + Loss + Backward + Update (all GPU)
+    double total_time;
+} TimingStats;
