@@ -181,5 +181,22 @@ __global__ void softmax_cross_entropy_backward_kernel(
     }
     __syncthreads();
 
-    
+    if (tid < num_classes) {
+        float prob = sample_logits[tid] / sum_exp;
+        int label = labels[b];
+
+        // Gradient: (prob - one_hot) / batch_size
+        float grad = prob;
+        if (tid == label) {
+            grad -= 1.0f;
+        }
+        grad /= (float)batch_size;
+
+        grad_output[b * num_classes + tid] = grad;
+
+        // Loss contribution (only for correct class)
+        if (tid == label) {
+            loss_per_sample[b] = -logf(fmaxf(prob, 1e-7f));
+        }
+    }
 }
