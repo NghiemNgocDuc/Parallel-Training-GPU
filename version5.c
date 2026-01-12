@@ -336,3 +336,27 @@ void update_weights_only(NeuralNetworkCUDA *nn, float learning_rate) {
 
     CUDA_CHECK(cudaDeviceSynchronize());
 }
+
+// loss on gpu
+float compute_loss_on_gpu(NeuralNetworkCUDA *nn, int batch_size){
+    int shared_mem = OUTPUT_SIZE * sizeof(float);
+    softmax_cross_entropy_backward_kernel<<<batch_size, OUTPUT_SIZE, shared_mem>>>(
+        nn->d_fc2_output,
+        nn->d_labels,
+        nn->d_grad_output,
+        batch_size,
+        OUTPUT_SIZE,
+        nn->d_loss
+    );
+
+    // Copy loss back to host and compute average(float32 is smaller and faster than int)
+    float h_loss[BATCH_SIZE];
+    CUDA_CHECK(cudaMemcpy(h_loss, nn->d_loss, batch_size * sizeof(float), cudaMemcpyDeviceToHost));
+    float total_loss = 0.0f;
+    for (int i = 0; i < batch_size; i++) {
+        total_loss += h_loss[i];
+    }
+    return total_loss / batch_size;
+
+}
+
