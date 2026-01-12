@@ -109,3 +109,77 @@ __global__ void relu_activation(float *data, int size) {
     }
 }
 
+__global__ void relu_gradient(float *grad_output, float *fc1_output, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        grad_output[idx] *= (fc1_output[idx] > 0) ? 1.0f : 0.0f;
+    }
+}
+
+__global__ void bias_backward_kernel(float *grad_output, float *grad_bias, int batch, int size) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < batch * size) {
+        int bias_idx = idx % size;
+        atomicAdd(&grad_bias[bias_idx], grad_output[idx]); // Use this since multiple threads can update the same bias, which not right due to racing for memory
+
+
+    }
+
+
+}
+
+// All other funcs on GPU, not need to D2H and then gradient H2D again
+
+__global__ void softmax_cross_entropy_backward_kernel(
+    float *logits,
+    int *labels,
+    float *grad_output,
+    int batch_size,
+    int num_classes,
+    float *loss_per_sample,
+
+
+) {
+    int b = blockIdx.x;
+    if (b >= batch_size) return;
+
+    extern __shared__ float shared[];
+    float *sample_logits = shared;
+
+    int tid = threadIdx.x;
+
+    // Load logits into shared memory
+    if (tid < num_classes) {
+        sample_logits[tid] = logits[b * num_classes + tid];
+    }
+    __syncthreads();
+
+    __shared__ float max_logit;
+    __shared__ float sum_exp;
+
+    if (tid == 0) {
+        max_logit = -INFINITY;
+        for (int i = 0; i < num_classes; i++) {
+            if (sample_logits[i] > max_logit) {
+                max_logit = sample_logits[i];
+            }
+        }
+    }
+    __syncthreads();
+
+    if (tid < num_classes) {
+        sample_logits[tid] = expf(sample_logits[tid] - max_logit);
+    }
+    __syncthreads();
+
+    // Compute sum of exponentials
+    if (tid == 0) {
+        sum_exp = 0.0f;
+        for (int i = 0; i < num_classes; i++) {
+            sum_exp += sample_logits[i];
+        }
+    }
+    __syncthreads();
+
+    
+}
