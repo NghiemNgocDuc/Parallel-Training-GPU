@@ -200,3 +200,49 @@ __global__ void softmax_cross_entropy_backward_kernel(
         }
     }
 }
+
+
+void forward_pass_only(
+    NeuralNetworkCUDA *nn,
+    float *d_input_batch,
+    int batch_size
+) {
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    // FC1: d_input_batch -> d_fc1_output
+    CUBLAS_CHECK(cublasSgemm(
+        nn->cublas_handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        HIDDEN_SIZE, batch_size, INPUT_SIZE,
+        &alpha,
+        nn->d_weights1, HIDDEN_SIZE,
+        nn->d_input_batch, INPUT_SIZE,
+        &beta,
+        nn->d_fc1_output, HIDDEN_SIZE
+    ));
+
+    int total_hidden = batch_size * HIDDEN_SIZE;
+    int grid_hidden = (total_hidden + 255) / 256;
+    bias_add_kernel<<<grid_hidden, 256>>>(nn->d_fc1_output, nn->d_bias1, batch_size, HIDDEN_SIZE);
+
+    relu_activation<<<grid_hidden, 256>>>(nn->d_fc1_output, total_hidden);
+
+    CUBLAS_CHECK(cublasSgemm(
+        nn->cublas_handle,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        OUTPUT_SIZE, batch_size, HIDDEN_SIZE,
+        &alpha,
+        nn->d_weights2, OUTPUT_SIZE,
+        nn->d_fc1_output, HIDDEN_SIZE,
+        &beta,
+        nn->d_fc2_output, OUTPUT_SIZE
+    ));
+
+    int total_output = batch_size * OUTPUT_SIZE;
+    int grid_output = (total_output + 255) / 256;
+    bias_add_kernel<<<grid_output, 256>>>(nn->d_fc2_output, nn->d_bias2, batch_size, OUTPUT_SIZE);  
+
+
+}
+
