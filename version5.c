@@ -408,3 +408,28 @@ void initialize_nn_cuda(NeuralNetworkCUDA *nn) {
     initialize_random_weights_cuda(nn);
 }
 
+void free_nn_cuda(NeuralNetworkCUDA *nn) {
+    CUDA_CHECK(cudaFree(nn->d_weights1));
+    CUDA_CHECK(cudaFree(nn->d_weights2));
+    CUDA_CHECK(cudaFree(nn->d_bias1));
+    CUDA_CHECK(cudaFree(nn->d_bias2));
+
+    CUDA_CHECK(cudaFree(nn->d_grad_weights1));
+    CUDA_CHECK(cudaFree(nn->d_grad_weights2));
+    CUDA_CHECK(cudaFree(nn->d_grad_bias1));
+    CUDA_CHECK(cudaFree(nn->d_grad_bias2));
+
+    CUDA_CHECK(cudaFree(nn->d_fc1_output));
+    CUDA_CHECK(cudaFree(nn->d_fc2_output));
+    CUDA_CHECK(cudaFree(nn->d_grad_hidden));
+    CUDA_CHECK(cudaFree(nn->d_grad_output));
+
+    // Persistent buffers
+    CUDA_CHECK(cudaFree(nn->d_input_batch));
+    CUDA_CHECK(cudaFree(nn->d_labels));
+    CUDA_CHECK(cudaFree(nn->d_loss));
+
+    CUBLAS_CHECK(cublasDestroy(nn->cublas_handle));
+}
+
+
