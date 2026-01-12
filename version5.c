@@ -246,3 +246,93 @@ void forward_pass_only(
 
 }
 
+void backward_pass_only(NeuralNetworkCUDA *nn, int batch_size) {
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    CUDA_CHECK(cudaMemset(nn->d_grad_weights2, 0, OUTPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMemset(nn->d_grad_bias2, 0, OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMemset(nn->d_grad_weights1, 0, HIDDEN_SIZE * INPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMemset(nn->d_grad_bias1, 0, HIDDEN_SIZE * sizeof(float)));   
+
+    CUBLAS_CHECK(cublasSgemm(
+        nn->cublas_handle,
+        CUBLAS_OP_N, CUBLAS_OP_T,
+        OUTPUT_SIZE, HIDDEN_SIZE, batch_size,
+        &alpha,
+        nn->d_grad_output, OUTPUT_SIZE,
+        nn->d_fc1_output, HIDDEN_SIZE,
+        &beta,
+        nn->d_grad_weights2, OUTPUT_SIZE
+    ));
+
+    int grid_bias2 = (OUTPUT_SIZE + 255) / 256;
+    int total_output = batch_size * OUTPUT_SIZE;
+    bias_backward_kernel<<<grid_bias2, 256>>>(nn->d_grad_output, nn->d_grad_bias2, batch_size, OUTPUT_SIZE);    
+
+    CUBLAS_CHECK(cublasSgemm(
+        nn->cublas_handle,
+        CUBLAS_OP_T, CUBLAS_OP_N,
+        HIDDEN_SIZE, batch_size, OUTPUT_SIZE,
+        &alpha,
+        nn->d_weights2, OUTPUT_SIZE,
+        nn->d_grad_output, OUTPUT_SIZE,
+        &beta,
+        nn->d_grad_hidden, HIDDEN_SIZE
+    ));
+
+    int total_hidden = batch_size * HIDDEN_SIZE;
+    int grid_hidden = (total_hidden + 255) / 256;
+    relu_gradient<<<grid_hidden, 256>>>(nn->d_grad_hidden, nn->d_fc1_output, total_hidden);
+
+    CUBLAS_CHECK(cublasSgemm(
+        nn->cublas_handle,
+        CUBLAS_OP_N, CUBLAS_OP_T,
+        HIDDEN_SIZE, INPUT_SIZE, batch_size,
+        &alpha,
+        nn->d_grad_hidden, HIDDEN_SIZE,
+        nn->d_input_batch, INPUT_SIZE,
+        &beta,
+        nn->d_grad_weights1, HIDDEN_SIZE
+    ));
+
+    bias_backward_kernel<<<grid_hidden, 256>>>(nn->d_grad_hidden, nn->d_grad_bias1, batch_size, HIDDEN_SIZE);
+}
+
+void update_weights_only(NeuralNetworkCUDA *nn, float learning_rate) {
+    const float alpha = -learning_rate;
+
+    CUBLAS_CHECK(cublasSaxpy(
+        nn->cublas_handle,
+        HIDDEN_SIZE * INPUT_SIZE,
+        &alpha,
+        nn->d_grad_weights1, 1,
+        nn->d_weights1, 1
+    ));
+
+    CUBLAS_CHECK(cublasSaxpy(
+        nn->cublas_handle,
+        OUTPUT_SIZE * HIDDEN_SIZE,
+        &alpha,
+        nn->d_grad_weights2, 1,
+        nn->d_weights2, 1
+    ));
+
+    CUBLAS_CHECK(cublasSaxpy(
+        nn->cublas_handle,
+        HIDDEN_SIZE,
+        &alpha,
+        nn->d_grad_bias1, 1,
+        nn->d_bias1, 1
+    ));
+
+    CUBLAS_CHECK(cublasSaxpy(
+        nn->cublas_handle,
+        OUTPUT_SIZE,
+        &alpha,
+        nn->d_grad_bias2, 1,
+        nn->d_bias2, 1
+    ));
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
