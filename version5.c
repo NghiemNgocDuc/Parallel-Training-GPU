@@ -360,3 +360,51 @@ float compute_loss_on_gpu(NeuralNetworkCUDA *nn, int batch_size){
 
 }
 
+void initialize_random_weights_cuda(NeuralNetworkCUDA *nn) {
+    float *h_weights1 = (float *)malloc(HIDDEN_SIZE * INPUT_SIZE * sizeof(float));
+    float *h_weights2 = (float *)malloc(OUTPUT_SIZE * HIDDEN_SIZE * sizeof(float));
+    float *h_bias1 = (float *)malloc(HIDDEN_SIZE * sizeof(float));
+    float *h_bias2 = (float *)malloc(OUTPUT_SIZE * sizeof(float));
+
+    initialize_weights_host(h_weights1, INPUT_SIZE, HIDDEN_SIZE);
+    initialize_weights_host(h_weights2, HIDDEN_SIZE, OUTPUT_SIZE);
+    initialize_bias_host(h_bias1, HIDDEN_SIZE);
+    initialize_bias_host(h_bias2, OUTPUT_SIZE);
+
+    CUDA_CHECK(cudaMemcpy(nn->d_weights1, h_weights1, HIDDEN_SIZE * INPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(nn->d_weights2, h_weights2, OUTPUT_SIZE * HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(nn->d_bias1, h_bias1, HIDDEN_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(nn->d_bias2, h_bias2, OUTPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+
+    free(h_weights1);
+    free(h_weights2);
+    free(h_bias1);
+    free(h_bias2);
+}
+
+void initialize_nn_cuda(NeuralNetworkCUDA *nn) {
+    CUDA_CHECK(cudaMalloc(&nn->d_weights1, HIDDEN_SIZE * INPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_weights2, OUTPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_bias1, HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_bias2, OUTPUT_SIZE * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc(&nn->d_grad_weights1, HIDDEN_SIZE * INPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_grad_weights2, OUTPUT_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_grad_bias1, HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_grad_bias2, OUTPUT_SIZE * sizeof(float)));
+
+    CUDA_CHECK(cudaMalloc(&nn->d_fc1_output, BATCH_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_fc2_output, BATCH_SIZE * OUTPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_grad_hidden, BATCH_SIZE * HIDDEN_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_grad_output, BATCH_SIZE * OUTPUT_SIZE * sizeof(float)));
+
+    // Persistent buffers
+    CUDA_CHECK(cudaMalloc(&nn->d_input_batch, BATCH_SIZE * INPUT_SIZE * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&nn->d_labels, BATCH_SIZE * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&nn->d_loss, BATCH_SIZE * sizeof(float)));
+
+    CUBLAS_CHECK(cublasCreate(&nn->cublas_handle));
+
+    initialize_random_weights_cuda(nn);
+}
+
