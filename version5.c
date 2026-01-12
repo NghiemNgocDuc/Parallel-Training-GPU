@@ -432,4 +432,74 @@ void free_nn_cuda(NeuralNetworkCUDA *nn) {
     CUBLAS_CHECK(cublasDestroy(nn->cublas_handle));
 }
 
+int main() {
+    srand(12345); // Fixed seed for debugging
 
+    float *train_data = (float *)malloc(TRAIN_SIZE * INPUT_SIZE * sizeof(float));
+    int *train_labels = (int *)malloc(TRAIN_SIZE * sizeof(int));
+    load_data("./data/X_train.bin", train_data, TRAIN_SIZE * INPUT_SIZE);
+    normalize_data(train_data, TRAIN_SIZE * INPUT_SIZE);
+    load_labels("./data/y_train.bin", train_labels, TRAIN_SIZE);
+
+    NeuralNetworkCUDA nn;
+    initialize_nn_cuda(&nn);
+
+    int num_batches = TRAIN_SIZE / BATCH_SIZE;
+    
+    // Initialize CORRECTED timing stats
+    TimingStats stats = {0};
+    
+    struct timespec start, end, step_start, step_end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    for (int epoch = 0; epoch < EPOCHS; epoch++) {
+        float total_loss = 0.0f;
+        for (int batch = 0; batch < num_batches; batch++) {
+            float *batch_input = train_data + batch * BATCH_SIZE * INPUT_SIZE;
+            int *batch_labels = train_labels + batch * BATCH_SIZE;
+
+            // === H2D Transfer: input data + labels ===
+            clock_gettime(CLOCK_MONOTONIC, &step_start);
+            CUDA_CHECK(cudaMemcpy(nn.d_input_batch, batch_input, BATCH_SIZE * INPUT_SIZE * sizeof(float), cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMemcpy(nn.d_labels, batch_labels, BATCH_SIZE * sizeof(int), cudaMemcpyHostToDevice));
+            clock_gettime(CLOCK_MONOTONIC, &step_end);
+            stats.memory_transfers += get_time_diff(step_start, step_end);
+
+            // === ALL GPU COMPUTATION ===
+            clock_gettime(CLOCK_MONOTONIC, &step_start);
+
+            // Forward pass
+            forward_pass_only(&nn, BATCH_SIZE);
+
+            // Loss + backward gradient (GPU-side softmax + cross-entropy)
+            float batch_loss = compute_loss_on_gpu(&nn, BATCH_SIZE);
+            total_loss += batch_loss;
+
+            // Backward pass
+            backward_pass_only(&nn, BATCH_SIZE);
+
+            // Weight updates
+            update_weights_only(&nn, LEARNING_RATE);
+
+            clock_gettime(CLOCK_MONOTONIC, &step_end);
+            stats.gpu_compute += get_time_diff(step_start, step_end);
+        }
+        printf("Epoch %d loss: %.4f\n", epoch, total_loss / num_batches);
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    stats.total_time = get_time_diff(start, end);
+    
+    printf("\n=== CUBLAS GPU IMPLEMENTATION (ALL COMPUTATION ON GPU) ===\n");
+    printf("Total training time: %.3f seconds\n\n", stats.total_time);
+
+    printf("Timing Breakdown:\n");
+    printf("  H2D transfers:  %6.3fs (%5.1f%%)\n", stats.memory_transfers, 100.0 * stats.memory_transfers / stats.total_time);
+    printf("  GPU compute:    %6.3fs (%5.1f%%)\n", stats.gpu_compute, 100.0 * stats.gpu_compute / stats.total_time);
+
+    free_nn_cuda(&nn);
+    free(train_data);
+    free(train_labels);
+
+    return 0;
+}
